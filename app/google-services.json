@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "189355303657",
+    "project_id": "tr335-videochat",
+    "storage_bucket": "tr335-videochat.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:189355303657:android:6106faa689990eeef28678",
+        "android_client_info": {
+          "package_name": "com.example.videochat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyApA_k-B9F3gDxEZiVuGpmJDajHjlztQZg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

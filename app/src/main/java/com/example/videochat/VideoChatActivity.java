@@ -5,6 +5,8 @@ import android.content.pm.PackageManager;
 import android.content.Context;
 import android.media.AudioManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.widget.Button;
 import android.widget.ImageButton;
@@ -336,7 +338,9 @@ public class VideoChatActivity extends AppCompatActivity {
 
     private void resetConnectionAndFindNewPartner() {
         hasOffered = false; // 🔥 reset để lần sau gọi lại
-        initializeWebRTC();
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            initializeWebRTC();
+        }, 300); // delay 300ms
     }
 
     private void toggleMicrophone() {
@@ -369,8 +373,15 @@ public class VideoChatActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (videoCapturer != null) {
-            try { videoCapturer.stopCapture(); } catch (InterruptedException e) { e.printStackTrace(); }
+            try {
+                videoCapturer.stopCapture();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } catch (Exception e) {
+                e.printStackTrace(); // 🔥 tránh crash khi Camera service chưa sẵn sàng
+            }
             videoCapturer.dispose();
+            videoCapturer = null;
         }
         if (localVideoTrack != null && localVideoView != null) {
             localVideoTrack.removeSink(localVideoView);

@@ -49,19 +49,19 @@ public class SignalingClient {
                     String callerId = roomSnap.child("callerId").getValue(String.class);
                     String calleeId = roomSnap.child("calleeId").getValue(String.class);
                     if (callerId != null && calleeId == null) {
-                        // Join room as callee
+                        // ✅ Join room as callee
                         roomId = roomSnap.getKey();
                         roomsRef.child(roomId).child("calleeId").setValue(clientId);
                         isCaller = false;
                         listenForSignals();
-                        callback.onPartnerFound(callerId);
+                        callback.onPartnerFound(callerId); // partner = caller
                         joined = true;
                         Log.d(TAG, "Joined room as callee: " + roomId);
                         break;
                     }
                 }
                 if (!joined) {
-                    // Create new room as caller
+                    // ✅ Create new room as caller
                     roomId = roomsRef.push().getKey();
                     Map<String, Object> roomData = new HashMap<>();
                     roomData.put("callerId", clientId);
@@ -69,7 +69,9 @@ public class SignalingClient {
                     isCaller = true;
                     listenForSignals();
                     Log.d(TAG, "Created room as caller: " + roomId);
-                    // Wait for partner to join
+
+                    // ⚡ Thêm đoạn này để báo caller biết đã tạo phòng (partner chưa có → null)
+                    callback.onPartnerFound(null);
                 }
             }
 
@@ -78,8 +80,28 @@ public class SignalingClient {
                 Log.e(TAG, "Firebase error: " + error.getMessage());
             }
         });
-    }
 
+        // 🔥 Lắng nghe callee join phòng (chỉ dành cho caller)
+        roomsRef.addChildEventListener(new com.google.firebase.database.ChildEventListener() {
+            @Override
+            public void onChildChanged(@NonNull DataSnapshot snapshot, String previousChildName) {
+                if (roomId != null && snapshot.getKey().equals(roomId)) {
+                    String callerId = snapshot.child("callerId").getValue(String.class);
+                    String calleeId = snapshot.child("calleeId").getValue(String.class);
+                    if (isCaller && calleeId != null) {
+                        // Callee vừa join
+                        callback.onPartnerFound(calleeId); // partner = callee
+                        Log.d(TAG, "Callee joined room: " + calleeId);
+                    }
+                }
+            }
+
+            @Override public void onChildAdded(@NonNull DataSnapshot snapshot, String s) {}
+            @Override public void onChildRemoved(@NonNull DataSnapshot snapshot) {}
+            @Override public void onChildMoved(@NonNull DataSnapshot snapshot, String s) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
+        });
+    }
     private void listenForSignals() {
         DatabaseReference signalRef = roomsRef.child(roomId);
         // Offer/Answer
@@ -164,5 +186,8 @@ public class SignalingClient {
 
     public String getClientId() {
         return clientId;
+    }
+    public boolean isCaller() {
+        return isCaller;
     }
 }

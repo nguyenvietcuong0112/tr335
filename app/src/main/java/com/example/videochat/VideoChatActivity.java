@@ -74,6 +74,7 @@ public class VideoChatActivity extends AppCompatActivity {
 
     // Signaling
     private SignalingClient signalingClient;
+    private String partnerId;   // 🔥 thêm biến này
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -206,19 +207,15 @@ public class VideoChatActivity extends AppCompatActivity {
 
             @Override
             public void onPartnerFound(String partnerId) {
-                String myId = signalingClient.getClientId();
-                // Rõ ràng chỉ caller tạo OFFER, callee chờ OFFER
-                boolean isCaller = myId.compareTo(partnerId) > 0;
-                Log.d(TAG, "Partner found! I am " + (isCaller ? "CALLER" : "CALLEE") + ".");
-                updateStatus("Partner found! Creating connection...");
-                if (isCaller) {
-                    new Handler().postDelayed(() -> {
-                        if (peerConnection.signalingState() == PeerConnection.SignalingState.STABLE) {
-                            createOffer();
-                        }
-                    }, 1000);
+                VideoChatActivity.this.partnerId = partnerId; // ✅ gán vào biến instance
+                if (partnerId == null) {
+                    updateStatus("Waiting for partner...");
+                } else {
+                    updateStatus("Partner found! ID: " + partnerId);
+                    if (signalingClient.isCaller()) {
+                        createOffer();
+                    }
                 }
-                // callee thì chỉ chờ nhận offer
             }
 
             @Override
@@ -338,9 +335,9 @@ public class VideoChatActivity extends AppCompatActivity {
                 MediaStreamTrack track = rtpReceiver.track();
                 if (track instanceof VideoTrack && remoteVideoView != null) {
                     VideoTrack remoteVideoTrack = (VideoTrack) track;
-                    remoteVideoTrack.addSink(remoteVideoView);
-                    Log.d(TAG, "[WEBRTC] Remote video track added via onAddTrack!");
                     runOnUiThread(() -> {
+                        remoteVideoTrack.addSink(remoteVideoView);
+                        Log.d(TAG, "[WEBRTC] Remote video track attached!");
                         updateStatus("Connected!");
                         isConnected = true;
                     });

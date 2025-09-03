@@ -2,10 +2,10 @@ package com.example.videochat;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.content.Context;
+import android.media.AudioManager;
 import android.os.Bundle;
-import android.os.Handler;
 import android.util.Log;
-import android.view.View;
 import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.TextView;
@@ -66,6 +66,9 @@ public class VideoChatActivity extends AppCompatActivity {
     private PeerConnection peerConnection;
     private EglBase eglBase;
 
+    // Audio
+    private AudioManager audioManager;
+
     // State
     private boolean isVideoEnabled = true;
     private boolean isAudioEnabled = true;
@@ -74,12 +77,15 @@ public class VideoChatActivity extends AppCompatActivity {
 
     // Signaling
     private SignalingClient signalingClient;
-    private String partnerId;   // 🔥 thêm biến này
+    private String partnerId;   // 🔥 lưu partnerId
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_video_chat);
+
+        // Init AudioManager
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
         initViews();
         setupClickListeners();
@@ -116,15 +122,17 @@ public class VideoChatActivity extends AppCompatActivity {
     }
 
     private void initializeWebRTC() {
-        // Release video views if already initialized to prevent double init
-        if (localVideoView != null) {
-            localVideoView.release();
-        }
-        if (remoteVideoView != null) {
-            remoteVideoView.release();
-        }
+        // Release video views if already initialized
+        if (localVideoView != null) localVideoView.release();
+        if (remoteVideoView != null) remoteVideoView.release();
 
         eglBase = EglBase.create();
+
+        // ✅ setup audio mode
+        if (audioManager != null) {
+            audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            audioManager.setSpeakerphoneOn(true); // bật loa ngoài
+        }
 
         // Initialize PeerConnectionFactory
         PeerConnectionFactory.InitializationOptions initializationOptions =
@@ -132,7 +140,6 @@ public class VideoChatActivity extends AppCompatActivity {
                         .createInitializationOptions();
         PeerConnectionFactory.initialize(initializationOptions);
 
-        // Create PeerConnectionFactory
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
         peerConnectionFactory = PeerConnectionFactory.builder()
                 .setOptions(options)
@@ -140,10 +147,10 @@ public class VideoChatActivity extends AppCompatActivity {
                 .setVideoDecoderFactory(new DefaultVideoDecoderFactory(eglBase.getEglBaseContext()))
                 .createPeerConnectionFactory();
 
-        // Create video capturer
+        // Video capturer
         createVideoCapturer();
 
-        // Create video source and track
+        // Video source + track
         localVideoSource = peerConnectionFactory.createVideoSource(videoCapturer.isScreencast());
         SurfaceTextureHelper surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.getEglBaseContext());
         videoCapturer.initialize(surfaceTextureHelper, this, localVideoSource.getCapturerObserver());
@@ -151,23 +158,30 @@ public class VideoChatActivity extends AppCompatActivity {
 
         localVideoTrack = peerConnectionFactory.createVideoTrack("local_video_track", localVideoSource);
 
-        // Create audio source and track
-        localAudioSource = peerConnectionFactory.createAudioSource(new MediaConstraints());
+        // ✅ Audio source + track với AutoGainControl
+        MediaConstraints audioConstraints = new MediaConstraints();
+        audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair("googEchoCancellation", "true"));
+        audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair("googAutoGainControl", "true"));
+        audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair("googHighpassFilter", "true"));
+        audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair("googNoiseSuppression", "true"));
+
+        localAudioSource = peerConnectionFactory.createAudioSource(audioConstraints);
         localAudioTrack = peerConnectionFactory.createAudioTrack("local_audio_track", localAudioSource);
 
-        // Setup local video view
+        // Local video view
         localVideoView.init(eglBase.getEglBaseContext(), null);
         localVideoView.setMirror(true);
         localVideoTrack.addSink(localVideoView);
 
-        // Setup remote video view
+        // Remote video view
         remoteVideoView.init(eglBase.getEglBaseContext(), null);
         remoteVideoView.setMirror(false);
         remoteVideoView.setEnableHardwareScaler(true);
-        // Create PeerConnection
+
+        // PeerConnection
         createPeerConnection();
 
-        // Initialize signaling client
+        // Signaling
         initializeSignaling();
     }
 
@@ -176,22 +190,17 @@ public class VideoChatActivity extends AppCompatActivity {
             @Override
             public void onRemoteDescription(SessionDescription sessionDescription) {
                 Log.d(TAG, "[SIGNALING] Got remote description: " + sessionDescription.type);
-                // Đảm bảo luôn setRemoteDescription, và phía callee chỉ tạo answer khi nhận offer
                 peerConnection.setRemoteDescription(new SimpleSdpObserver() {
                     @Override
                     public void onSetSuccess() {
                         if (sessionDescription.type == SessionDescription.Type.OFFER) {
-                            Log.d(TAG, "[SIGNALING] setRemoteDescription(OFFER) success, creating ANSWER");
                             peerConnection.createAnswer(new SimpleSdpObserver() {
                                 @Override
                                 public void onCreateSuccess(SessionDescription answerSdp) {
-                                    Log.d(TAG, "[SIGNALING] Created ANSWER, setting local description and sending...");
                                     peerConnection.setLocalDescription(new SimpleSdpObserver(), answerSdp);
                                     signalingClient.sendAnswer(answerSdp);
                                 }
                             }, new MediaConstraints());
-                        } else if (sessionDescription.type == SessionDescription.Type.ANSWER) {
-                            Log.d(TAG, "[SIGNALING] setRemoteDescription(ANSWER) success.");
                         }
                     }
                 }, sessionDescription);
@@ -199,7 +208,6 @@ public class VideoChatActivity extends AppCompatActivity {
 
             @Override
             public void onIceCandidate(IceCandidate iceCandidate) {
-                Log.d(TAG, "[SIGNALING] Got remote ICE candidate");
                 if (peerConnection != null) {
                     peerConnection.addIceCandidate(iceCandidate);
                 }
@@ -207,7 +215,7 @@ public class VideoChatActivity extends AppCompatActivity {
 
             @Override
             public void onPartnerFound(String partnerId) {
-                VideoChatActivity.this.partnerId = partnerId; // ✅ gán vào biến instance
+                VideoChatActivity.this.partnerId = partnerId;
                 if (partnerId == null) {
                     updateStatus("Waiting for partner...");
                 } else {
@@ -222,10 +230,8 @@ public class VideoChatActivity extends AppCompatActivity {
             public void onPartnerDisconnected() {
                 runOnUiThread(() -> {
                     updateStatus("Partner disconnected");
-                    Log.d(TAG, "[SIGNALING] Partner disconnected, closing peer and resetting...");
                     isConnected = false;
                     if (peerConnection != null) peerConnection.close();
-                    // Giải phóng trạng thái hiện tại và chuẩn bị room mới để bắt cặp tiếp
                     resetConnectionAndFindNewPartner();
                 });
             }
@@ -233,219 +239,103 @@ public class VideoChatActivity extends AppCompatActivity {
     }
 
     private void createOffer() {
-        if (peerConnection.signalingState() != PeerConnection.SignalingState.STABLE) {
-            Log.w(TAG, "Cannot create offer, signaling state: " + peerConnection.signalingState());
-            return;
-        }
-
-        Log.d(TAG, "Creating OFFER...");
         peerConnection.createOffer(new SimpleSdpObserver() {
             @Override
             public void onCreateSuccess(SessionDescription sessionDescription) {
                 peerConnection.setLocalDescription(new SimpleSdpObserver(), sessionDescription);
                 signalingClient.sendOffer(sessionDescription);
             }
-
-            @Override
-            public void onCreateFailure(String error) {
-                Log.e(TAG, "[SIGNALING] createOffer failed: " + error);
-            }
         }, new MediaConstraints());
     }
 
-
     private static class SimpleSdpObserver implements SdpObserver {
-        @Override
-        public void onCreateSuccess(SessionDescription sessionDescription) {
-        }
-
-        @Override
-        public void onSetSuccess() {
-        }
-
-        @Override
-        public void onCreateFailure(String s) {
-        }
-
-        @Override
-        public void onSetFailure(String s) {
-        }
+        @Override public void onCreateSuccess(SessionDescription sessionDescription) {}
+        @Override public void onSetSuccess() {}
+        @Override public void onCreateFailure(String s) {}
+        @Override public void onSetFailure(String s) {}
     }
 
     private void createVideoCapturer() {
         videoCapturer = new Camera2Capturer(this, "0", new CameraVideoCapturer.CameraEventsHandler() {
-            @Override
-            public void onCameraError(String errorDescription) {
-                Log.e(TAG, "Camera error: " + errorDescription);
-            }
-
-            @Override
-            public void onCameraDisconnected() {
-                Log.d(TAG, "Camera disconnected");
-            }
-
-            @Override
-            public void onCameraFreezed(String errorDescription) {
-                Log.e(TAG, "Camera freezed: " + errorDescription);
-            }
-
-            @Override
-            public void onCameraOpening(String cameraName) {
-                Log.d(TAG, "Camera opening: " + cameraName);
-            }
-
-            @Override
-            public void onFirstFrameAvailable() {
-                Log.d(TAG, "First frame available");
-            }
-
-            @Override
-            public void onCameraClosed() {
-                Log.d(TAG, "Camera closed");
-            }
+            @Override public void onCameraError(String errorDescription) { Log.e(TAG, "Camera error: " + errorDescription); }
+            @Override public void onCameraDisconnected() {}
+            @Override public void onCameraFreezed(String errorDescription) {}
+            @Override public void onCameraOpening(String cameraName) {}
+            @Override public void onFirstFrameAvailable() {}
+            @Override public void onCameraClosed() {}
         });
     }
 
     private void createPeerConnection() {
         List<PeerConnection.IceServer> iceServers = new ArrayList<>();
-
         iceServers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
-        iceServers.add(PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer());
-        iceServers.add(PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer());
-        iceServers.add(PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
-                .setUsername("openrelayproject")
-                .setPassword("openrelayproject")
-                .createIceServer());
 
         PeerConnection.RTCConfiguration rtcConfig = new PeerConnection.RTCConfiguration(iceServers);
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
 
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, new PeerConnection.Observer() {
-            @Override
-            public void onIceCandidate(IceCandidate iceCandidate) {
-                Log.d(TAG, "[WEBRTC] Local ICE candidate: " + iceCandidate.sdp);
-                if (signalingClient != null) {
-                    signalingClient.sendIceCandidate(iceCandidate);
-                }
-            }
-
-            @Override
-            public void onAddTrack(RtpReceiver rtpReceiver, MediaStream[] mediaStreams) {
-                Log.d(TAG, "[WEBRTC] onAddTrack: " + rtpReceiver.id());
+            @Override public void onIceCandidate(IceCandidate iceCandidate) { signalingClient.sendIceCandidate(iceCandidate); }
+            @Override public void onAddTrack(RtpReceiver rtpReceiver, MediaStream[] mediaStreams) {
                 MediaStreamTrack track = rtpReceiver.track();
-                if (track instanceof VideoTrack && remoteVideoView != null) {
+                if (track instanceof VideoTrack) {
                     VideoTrack remoteVideoTrack = (VideoTrack) track;
                     runOnUiThread(() -> {
                         remoteVideoTrack.addSink(remoteVideoView);
-                        Log.d(TAG, "[WEBRTC] Remote video track attached!");
                         updateStatus("Connected!");
                         isConnected = true;
                     });
                 }
             }
-
-            @Override
-            public void onAddStream(MediaStream stream) {
-                // Deprecated trong Unified Plan → để trống
-                Log.d(TAG, "[WEBRTC] onAddStream (deprecated) ignored.");
-            }
-
-            @Override
-            public void onDataChannel(DataChannel dataChannel) {
-                // Chỉ cần nếu bạn muốn dùng DataChannel (chat, tín hiệu custom)
-                Log.d(TAG, "[WEBRTC] onDataChannel opened: " + dataChannel.label());
-            }
-
-            @Override
-            public void onConnectionChange(PeerConnection.PeerConnectionState newState) {
-                Log.d(TAG, "[WEBRTC] Connection state: " + newState);
-            }
-
-            @Override
-            public void onSignalingChange(PeerConnection.SignalingState signalingState) {
-                Log.d(TAG, "[WEBRTC] Signaling state: " + signalingState);
-            }
-
-            @Override
-            public void onIceConnectionChange(PeerConnection.IceConnectionState iceConnectionState) {
-                Log.d(TAG, "[WEBRTC] ICE connection state: " + iceConnectionState);
-            }
-
-            @Override
-            public void onIceConnectionReceivingChange(boolean b) {
-                Log.d(TAG, "[WEBRTC] ICE connection receiving change: " + b);
-            }
-
-            @Override
-            public void onIceGatheringChange(PeerConnection.IceGatheringState iceGatheringState) {
-                Log.d(TAG, "[WEBRTC] ICE gathering state: " + iceGatheringState);
-            }
-
-            @Override
-            public void onIceCandidatesRemoved(IceCandidate[] iceCandidates) {
-                Log.d(TAG, "[WEBRTC] ICE candidates removed: " + iceCandidates.length);
-            }
-
-            @Override
-            public void onRemoveStream(MediaStream mediaStream) {
-                Log.d(TAG, "[WEBRTC] onRemoveStream");
-            }
-
-            @Override
-            public void onRenegotiationNeeded() {
-                Log.d(TAG, "[WEBRTC] onRenegotiationNeeded");
-            }
+            @Override public void onDataChannel(DataChannel dataChannel) {}
+            @Override public void onConnectionChange(PeerConnection.PeerConnectionState newState) {}
+            @Override public void onSignalingChange(PeerConnection.SignalingState signalingState) {}
+            @Override public void onIceConnectionChange(PeerConnection.IceConnectionState iceConnectionState) {}
+            @Override public void onIceConnectionReceivingChange(boolean b) {}
+            @Override public void onIceGatheringChange(PeerConnection.IceGatheringState iceGatheringState) {}
+            @Override public void onIceCandidatesRemoved(IceCandidate[] iceCandidates) {}
+            @Override public void onRemoveStream(MediaStream mediaStream) {}
+            @Override public void onRenegotiationNeeded() {}
+            @Override public void onAddStream(MediaStream stream) {}
         });
 
-        // ✅ Add local tracks với streamId để Unified Plan hoạt động chính xác
         if (peerConnection != null) {
             List<String> streamIds = Collections.singletonList("local_stream");
-            Log.d(TAG, "[WEBRTC] Adding local video and audio tracks...");
             peerConnection.addTrack(localVideoTrack, streamIds);
             peerConnection.addTrack(localAudioTrack, streamIds);
         }
     }
 
-
     private void findNextPartner() {
         updateStatus("Looking for partner...");
         isConnected = false;
-        Log.d(TAG, "[CALL] Ending current connection and looking for next partner");
-        if (signalingClient != null) {
-            signalingClient.disconnect();
-        }
-        if (peerConnection != null) {
-            peerConnection.close();
-        }
+        if (signalingClient != null) signalingClient.disconnect();
+        if (peerConnection != null) peerConnection.close();
         resetConnectionAndFindNewPartner();
     }
 
     private void endCall() {
-        if (signalingClient != null) {
-            signalingClient.disconnect();
-        }
-        if (peerConnection != null) {
-            peerConnection.close();
-        }
-        // Khi end call, reset matching để chuẩn bị state mới nếu user muốn match tiếp
+        if (signalingClient != null) signalingClient.disconnect();
+        if (peerConnection != null) peerConnection.close();
         resetConnectionAndFindNewPartner();
-        // Hoặc nếu muốn đóng Activity hẳn: finish();
+
+        // ✅ restore audio mode
+        if (audioManager != null) {
+            audioManager.setSpeakerphoneOn(false);
+            audioManager.setMode(AudioManager.MODE_NORMAL);
+        }
+
         finish();
     }
 
     private void toggleCamera() {
         if (videoCapturer instanceof CameraVideoCapturer) {
-            CameraVideoCapturer cameraVideoCapturer = (CameraVideoCapturer) videoCapturer;
-            cameraVideoCapturer.switchCamera(null);
+            ((CameraVideoCapturer) videoCapturer).switchCamera(null);
             isFrontCamera = !isFrontCamera;
         }
     }
 
     private void resetConnectionAndFindNewPartner() {
-        // Tạo lại signaling client, peer connection & UI để vào phòng mới
-        Log.d(TAG, "[FLOW] Resetting connection and starting new match");
-        // Có thể cần giải phóng các track/nguồn cũ (video/audio)
-        initializeWebRTC(); // sẽ khởi tạo lại signaling, peer,...
+        initializeWebRTC();
     }
 
     private void toggleMicrophone() {
@@ -458,13 +348,7 @@ public class VideoChatActivity extends AppCompatActivity {
     }
 
     private void updateStatus(String status) {
-        if (Thread.currentThread() == getMainLooper().getThread()) {
-            // Đã ở UI thread, cập nhật trực tiếp
-            tvStatus.setText(status);
-        } else {
-            // Không ở UI thread, chuyển về UI thread
-            runOnUiThread(() -> tvStatus.setText(status));
-        }
+        runOnUiThread(() -> tvStatus.setText(status));
     }
 
     @Override
@@ -484,25 +368,22 @@ public class VideoChatActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (videoCapturer != null) {
-            try {
-                videoCapturer.stopCapture();
-            } catch (InterruptedException e) {
-                Log.e(TAG, "Error stopping video capture", e);
-            }
+            try { videoCapturer.stopCapture(); } catch (InterruptedException e) { e.printStackTrace(); }
             videoCapturer.dispose();
         }
         if (localVideoTrack != null && localVideoView != null) {
             localVideoTrack.removeSink(localVideoView);
         }
-        if (localVideoView != null) {
-            localVideoView.release();
+        if (localVideoView != null) localVideoView.release();
+        if (remoteVideoView != null) remoteVideoView.release();
+        if (eglBase != null) eglBase.release();
+
+        // ✅ restore audio mode
+        if (audioManager != null) {
+            audioManager.setSpeakerphoneOn(false);
+            audioManager.setMode(AudioManager.MODE_NORMAL);
         }
-        if (remoteVideoView != null) {
-            remoteVideoView.release();
-        }
-        if (eglBase != null) {
-            eglBase.release();
-        }
+
         super.onDestroy();
     }
 }

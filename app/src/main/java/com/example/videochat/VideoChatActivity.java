@@ -134,11 +134,6 @@ public class VideoChatActivity extends AppCompatActivity {
             audioManager.setSpeakerphoneOn(true); // bật loa ngoài
         }
 
-        // Initialize PeerConnectionFactory
-        PeerConnectionFactory.InitializationOptions initializationOptions =
-                PeerConnectionFactory.InitializationOptions.builder(this)
-                        .createInitializationOptions();
-        PeerConnectionFactory.initialize(initializationOptions);
 
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
         peerConnectionFactory = PeerConnectionFactory.builder()

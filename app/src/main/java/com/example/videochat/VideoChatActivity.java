@@ -74,6 +74,8 @@ public class VideoChatActivity extends AppCompatActivity {
     private boolean isAudioEnabled = true;
     private boolean isFrontCamera = true;
     private boolean isConnected = false;
+    private boolean hasOffered = false;
+
 
     // Signaling
     private SignalingClient signalingClient;
@@ -166,6 +168,7 @@ public class VideoChatActivity extends AppCompatActivity {
         // Local video view
         localVideoView.init(eglBase.getEglBaseContext(), null);
         localVideoView.setMirror(true);
+        localVideoView.setEnableHardwareScaler(true); // thêm dòng này
         localVideoTrack.addSink(localVideoView);
 
         // Remote video view
@@ -211,11 +214,13 @@ public class VideoChatActivity extends AppCompatActivity {
             @Override
             public void onPartnerFound(String partnerId) {
                 VideoChatActivity.this.partnerId = partnerId;
+
                 if (partnerId == null) {
                     updateStatus("Waiting for partner...");
                 } else {
                     updateStatus("Partner found! ID: " + partnerId);
-                    if (signalingClient.isCaller()) {
+                    if (signalingClient.isCaller() && !hasOffered) {
+                        hasOffered = true; // 🔥 chỉ tạo offer 1 lần
                         createOffer();
                     }
                 }
@@ -330,6 +335,7 @@ public class VideoChatActivity extends AppCompatActivity {
     }
 
     private void resetConnectionAndFindNewPartner() {
+        hasOffered = false; // 🔥 reset để lần sau gọi lại
         initializeWebRTC();
     }
 
